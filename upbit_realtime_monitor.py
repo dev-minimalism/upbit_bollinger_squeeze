@@ -37,6 +37,110 @@ class UpbitRealTimeVolatilityMonitor:
     # 로깅 설정 (use logger configured in main.py)
     self.logger = logging.getLogger(__name__)
 
+    # Ticker to Korean name mapping
+    self.ticker_to_korean = {
+      # 메이저 코인
+      'KRW-BTC': '비트코인',
+      'KRW-ETH': '이더리움',
+      'KRW-XRP': '리플',
+      'KRW-ADA': '에이다',
+      'KRW-DOT': '폴카닷',
+      # 대형 알트코인
+      'KRW-LINK': '체인링크',
+      'KRW-ENS': '이더리움네임서비스',
+      'KRW-SOL': '솔라나',
+      'KRW-CTC': '크레딧코인',
+      'KRW-TRX': '트론',
+      # 중형 알트코인
+      'KRW-AVAX': '아발란체',
+      'KRW-SHIB': '시바이누',
+      'KRW-SNT': '스테이터스네트워크토큰',
+      'KRW-BTT': '비트토렌트',
+      'KRW-XLM': '스텔라루멘',
+      # 소형 알트코인
+      'KRW-DOGE': '도지코인',
+      'KRW-THETA': '세타토큰',
+      'KRW-HBAR': '헤데라',
+      'KRW-OMNI': '옴니네트워크',
+      'KRW-ALGO': '알고랜드',
+      # 한국 인기 코인
+      'KRW-T': '쓰레스홀드',
+      'KRW-ONDO': '온도',
+      'KRW-TT': '썬더코어',
+      'KRW-CVC': '시빅',
+      'KRW-TOKAMAK': '토카막네트워크',
+      # DeFi & 신규 코인
+      'KRW-IOTA': '아이오타',
+      'KRW-AQT': '알파쿼크',
+      'KRW-SUI': '수이',
+      'KRW-IQ': '아이큐',
+      'KRW-XEC': '이캐시',
+      'KRW-MTL': '메탈',
+      'KRW-PUNDIX': '펀디엑스',
+      'KRW-PYTH': '피스네트워크',
+      'KRW-KAVA': '카바',
+      'KRW-A': '아놀드',
+      'KRW-BAT': '베이직어텐션토큰',
+      'KRW-ARB': '아비트럼',
+      'KRW-WAXP': '왁스',
+      'KRW-SAND': '샌드박스',
+      'KRW-XTZ': '테조스',
+      'KRW-BORA': '보라',
+      'KRW-AERGO': '아르고',
+      'KRW-NEO': '네오',
+      'KRW-EGLD': '멀티버스엑스',
+      'KRW-ATOM': '코스모스',
+      'KRW-BIGTIME': '빅타임',
+      'KRW-ZIL': '질리카',
+      'KRW-VET': '비체인',
+      'KRW-ELF': '엘프',
+      'KRW-DRIFT': '드리프트',
+      'KRW-MASK': '마스크네트워크',
+      'KRW-NEAR': '니어프로토콜',
+      'KRW-G': '그래비티',
+      'KRW-SXP': '스와이프',
+      'KRW-BEAM': '빔',
+      'KRW-POLYX': '폴리매쉬',
+      'KRW-ATH': '아토스',
+      'KRW-HIVE': '하이브',
+      'KRW-QTUM': '퀀텀',
+      'KRW-TFUEL': '세타퓨엘',
+      'KRW-VANA': '바나',
+      'KRW-AGLD': '어드벤처골드',
+      'KRW-IOST': '아이오에스티',
+      'KRW-MLK': '밀크',
+      'KRW-STG': '스타게이트',
+      'KRW-SC': '시아코인',
+      'KRW-APT': '앱토스',
+      'KRW-SAFE': '세이프',
+      'KRW-BLAST': '블라스트',
+      'KRW-ME': '미미르'
+    }
+
+    # 모니터링 대상 코인 (업비트 원화 마켓)
+    self.watchlist = [
+      # 메이저 코인
+      'KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-ADA', 'KRW-DOT',
+      # 대형 알트코인
+      'KRW-LINK', 'KRW-ENS', 'KRW-SOL', 'KRW-CTC', 'KRW-TRX',
+      # 중형 알트코인
+      'KRW-AVAX', 'KRW-SHIB', 'KRW-SNT', 'KRW-BTT', 'KRW-XLM',
+      # 소형 알트코인
+      'KRW-DOGE', 'KRW-THETA', 'KRW-HBAR', 'KRW-OMNI', 'KRW-ALGO',
+      # 한국 인기 코인
+      'KRW-T', 'KRW-ONDO', 'KRW-TT', 'KRW-CVC', 'KRW-TOKAMAK',
+      # DeFi & 신규 코인
+      'KRW-IOTA', 'KRW-AQT', 'KRW-SUI', 'KRW-IQ', 'KRW-XEC',
+      'KRW-MTL', 'KRW-PUNDIX', 'KRW-PYTH', 'KRW-KAVA', 'KRW-A',
+      'KRW-BAT', 'KRW-ARB', 'KRW-WAXP', 'KRW-SAND', 'KRW-XTZ',
+      'KRW-BORA', 'KRW-AERGO', 'KRW-NEO', 'KRW-EGLD', 'KRW-ATOM',
+      'KRW-BIGTIME', 'KRW-ZIL', 'KRW-VET', 'KRW-ELF', 'KRW-DRIFT',
+      'KRW-MASK', 'KRW-NEAR', 'KRW-G', 'KRW-SXP', 'KRW-BEAM',
+      'KRW-POLYX', 'KRW-ATH', 'KRW-HIVE', 'KRW-QTUM', 'KRW-TFUEL',
+      'KRW-VANA', 'KRW-AGLD', 'KRW-IOST', 'KRW-MLK', 'KRW-STG',
+      'KRW-SC', 'KRW-APT', 'KRW-SAFE', 'KRW-BLAST', 'KRW-ME'
+    ]
+
     # 텔레그램 설정
     self.telegram_bot_token = telegram_bot_token
     self.telegram_chat_id = telegram_chat_id
@@ -52,56 +156,6 @@ class UpbitRealTimeVolatilityMonitor:
       except Exception as e:
         self.logger.error(f"❌ Telegram bot initialization failed: {e}")
         self.telegram_app = None
-
-    # 모니터링 대상 코인 (업비트 원화 마켓)
-    self.watchlist = [
-      # 메이저 코인
-      'KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-ADA', 'KRW-DOT',
-      # 대형 알트코인
-      'KRW-LINK', 'KRW-LTC', 'KRW-BCH', 'KRW-EOS', 'KRW-TRX',
-      # 중형 알트코인
-      'KRW-AVAX', 'KRW-MATIC', 'KRW-ATOM', 'KRW-NEAR', 'KRW-ALGO',
-      # 소형 알트코인
-      'KRW-VET', 'KRW-THETA', 'KRW-FIL', 'KRW-AAVE', 'KRW-CRV',
-      # 한국 인기 코인
-      'KRW-DOGE', 'KRW-SHIB', 'KRW-APT', 'KRW-OP', 'KRW-ARB',
-      # DeFi & 신규 코인
-      'KRW-UNI', 'KRW-SUSHI', 'KRW-1INCH', 'KRW-SNX', 'KRW-COMP'
-    ]
-
-    # Inside UpbitRealTimeVolatilityMonitor class, in __init__
-    self.ticker_to_korean = {
-      'KRW-BTC': '비트코인',
-      'KRW-ETH': '이더리움',
-      'KRW-XRP': '리플',
-      'KRW-ADA': '에이다',
-      'KRW-DOT': '폴카닷',
-      'KRW-LINK': '체인링크',
-      'KRW-LTC': '라이트코인',
-      'KRW-BCH': '비트코인캐시',
-      'KRW-EOS': '이오스',
-      'KRW-TRX': '트론',
-      'KRW-AVAX': '아발란체',
-      'KRW-MATIC': '폴리곤',
-      'KRW-ATOM': '코스모스',
-      'KRW-NEAR': '니어프로토콜',
-      'KRW-ALGO': '알고랜드',
-      'KRW-VET': '비체인',
-      'KRW-THETA': '세타토큰',
-      'KRW-FIL': '파일코인',
-      'KRW-AAVE': '아베',
-      'KRW-CRV': '커브',
-      'KRW-DOGE': '도지코인',
-      'KRW-SHIB': '시바이누',
-      'KRW-APT': '앱토스',
-      'KRW-OP': '옵티미즘',
-      'KRW-ARB': '아비트럼',
-      'KRW-UNI': '유니스왑',
-      'KRW-SUSHI': '스시스왑',
-      'KRW-1INCH': '1인치',
-      'KRW-SNX': '신세틱스',
-      'KRW-COMP': '컴파운드'
-    }
 
     # 기술적 지표 설정
     self.bb_period = 20
