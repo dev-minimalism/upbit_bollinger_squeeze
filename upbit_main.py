@@ -2,10 +2,10 @@
 업비트 코인 변동성 폭파 볼린저 밴드 트레이딩 시스템 - 메인 실행 파일
 
 사용법:
-    python main.py --mode backtest    # 백테스트만 실행
-    python main.py --mode monitor     # 실시간 모니터링만 실행
-    python main.py --mode monitor-default  # 백그라운드 모니터링 (기본값)
-    python main.py --mode both        # 백테스트 후 모니터링 실행 (기본값)
+    python upbit_main.py --mode backtest    # 백테스트만 실행
+    python upbit_main.py --mode monitor     # 실시간 모니터링만 실행
+    python upbit_main.py --mode monitor-default  # 백그라운드 모니터링 (기본값)
+    python upbit_main.py --mode both        # 백테스트 후 모니터링 실행 (기본값)
 
 텔레그램 설정:
     export UPBIT_BOLLINGER_TELEGRAM_BOT_TOKEN="your_bot_token"
