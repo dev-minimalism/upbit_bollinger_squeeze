@@ -61,3 +61,4 @@ htmlcov/
 .idea
 /trading_monitor.log
 /venv/
+/upbit_trading_monitor.log
