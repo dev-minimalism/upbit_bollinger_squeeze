@@ -147,13 +147,13 @@ class UpbitVolatilityBollingerBacktest:
       # 대형 알트코인
       'KRW-LINK', 'KRW-BCH', 'KRW-TRX', 'KRW-SOL', 'KRW-DOGE'
       # # 중형 알트코인
-      # 'KRW-AVAX', 'KRW-MATIC', 'KRW-ATOM', 'KRW-ALGO',
+      'KRW-AVAX', 'KRW-MATIC', 'KRW-ATOM', 'KRW-ALGO',
       # # 소형 알트코인
-      # 'KRW-VET', 'KRW-THETA', 'KRW-FIL', 'KRW-AAVE', 'KRW-CRV',
+      'KRW-VET', 'KRW-THETA', 'KRW-FIL', 'KRW-AAVE', 'KRW-CRV',
       # # 한국 인기 코인
-      # 'KRW-DOGE', 'KRW-SHIB', 'KRW-APT', 'KRW-OP', 'KRW-ARB',
+      'KRW-DOGE', 'KRW-SHIB', 'KRW-APT', 'KRW-OP', 'KRW-ARB',
       # # DeFi & 신규 코인
-      # 'KRW-UNI', 'KRW-SUSHI', 'KRW-1INCH', 'KRW-SNX', 'KRW-COMP'
+      'KRW-UNI', 'KRW-SUSHI', 'KRW-1INCH', 'KRW-SNX', 'KRW-COMP'
     ]
 
     self.initial_capital = initial_capital
@@ -213,9 +213,8 @@ class UpbitVolatilityBollingerBacktest:
       print("🛡️ 보수적 전략: 안전 우선, 신중한 매매")
 
   def calculate_technical_indicators(self, data: pd.DataFrame) -> pd.DataFrame:
-    """기술적 지표 계산"""
-    if len(data) < max(self.bb_period, self.rsi_period,
-                       self.volatility_lookback):
+    """기술적 지표 계산 (수정된 볼린저 스퀴즈 전략)"""
+    if len(data) < max(self.bb_period, self.rsi_period, self.volatility_lookback):
       return data
 
     # 볼린저 밴드
@@ -227,11 +226,8 @@ class UpbitVolatilityBollingerBacktest:
     # 밴드폭 (변동성 지표)
     data['Band_Width'] = (data['Upper_Band'] - data['Lower_Band']) / data['SMA']
 
-    # 변동성 압축 신호
-    data['Volatility_Squeeze'] = (
-        data['Band_Width'] < data['Band_Width'].rolling(
-        self.volatility_lookback).quantile(self.volatility_threshold)
-    )
+    # 스퀴즈 감지 (최근 20일 중 최소값과 비교) - 컬럼명 통일
+    data['Volatility_Squeeze'] = data['Band_Width'] < data['Band_Width'].rolling(20).min() * 1.1
 
     # 볼린저 밴드 위치 (0~1)
     data['BB_Position'] = (data['close'] - data['Lower_Band']) / (
@@ -244,12 +240,25 @@ class UpbitVolatilityBollingerBacktest:
     rs = gain / loss
     data['RSI'] = 100 - (100 / (1 + rs))
 
-    # 매매 신호 생성
-    data['Buy_Signal'] = (data['RSI'] > self.rsi_overbought) & (
-    data['Volatility_Squeeze'])
-    data['Sell_50_Signal'] = (data['BB_Position'] >= self.bb_sell_threshold) | (
-        abs(data['BB_Position'] - 0.5) <= 0.1)
-    data['Sell_All_Signal'] = data['BB_Position'] <= self.bb_sell_all_threshold
+    # 가격 모멘텀 (스퀴즈 브레이크아웃 감지)
+    data['Price_Change'] = data['close'].pct_change()
+    data['Volume_MA'] = data['volume'].rolling(20).mean() if 'volume' in data.columns else 1
+    data['Volume_Ratio'] = data['volume'] / data['Volume_MA'] if 'volume' in data.columns else 1
+
+    # 수정된 매매 신호 - 컬럼명 통일
+    # 매수: 스퀴즈 상태에서 상단 밴드 돌파 + 거래량 증가
+    data['Buy_Signal'] = (
+        data['Volatility_Squeeze'] &  # BB_Squeeze → Volatility_Squeeze로 변경
+        (data['close'] > data['Upper_Band']) &
+        (data['Volume_Ratio'] > 1.2) &  # 거래량 20% 증가
+        (data['RSI'] > 50) & (data['RSI'] < 80)  # RSI 중립~과매수 초기
+    )
+
+    # 50% 익절: BB 상단 근처
+    data['Sell_50_Signal'] = data['BB_Position'] >= 0.85
+
+    # 전량 매도: BB 하단 근처 또는 손절
+    data['Sell_All_Signal'] = (data['BB_Position'] <= 0.15) | (data['RSI'] < 30)
 
     return data
 
@@ -820,10 +829,10 @@ class UpbitVolatilityBollingerBacktest:
     ax2.grid(True, alpha=0.3)
 
     # 3. 변동성 지표
+    # 3. 변동성 지표 부분에서
     ax3 = axes[2]
-    ax3.plot(data.index, data['Band_Width'], 'brown', linewidth=1.5,
-             label='밴드폭')
-    squeeze_data = data[data['Volatility_Squeeze']]
+    ax3.plot(data.index, data['Band_Width'], 'brown', linewidth=1.5, label='밴드폭')
+    squeeze_data = data[data['Volatility_Squeeze']]  # BB_Squeeze → Volatility_Squeeze로 변경
     if not squeeze_data.empty:
       ax3.scatter(squeeze_data.index, squeeze_data['Band_Width'], color='red',
                   s=20, alpha=0.7, label='변동성 압축')

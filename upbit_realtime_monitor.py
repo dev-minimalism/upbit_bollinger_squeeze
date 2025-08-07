@@ -300,10 +300,13 @@ class UpbitRealTimeVolatilityMonitor:
     """Format analysis message for Telegram command."""
     try:
       symbol = signals['symbol']
+      korean_name = self.ticker_to_korean.get(symbol, symbol)
       price = signals['price']
       rsi = signals['rsi']
       bb_pos = signals['bb_position']
-      volatility_squeeze = signals['volatility_squeeze']
+      bb_squeeze = signals.get('bb_squeeze', False)
+      volume_ratio = signals.get('volume_ratio', 1.0)
+      squeeze_breakout = signals.get('squeeze_breakout', False)
       timestamp = signals['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
       buy_signal = signals['buy_signal']
       sell_50_signal = signals['sell_50_signal']
@@ -334,17 +337,19 @@ class UpbitRealTimeVolatilityMonitor:
       signals_text = " | ".join(signals_list) if signals_list else "📊 신호 없음"
 
       message = (
-        f"📈 <b>분석: {symbol}</b>\n\n"
+        f"📈 <b>분석: {korean_name}</b> ({symbol})\n\n"
         f"💰 <b>현재가:</b> {price:,.0f}원\n"
         f"📊 <b>RSI:</b> {rsi:.1f} ({rsi_status})\n"
         f"📍 <b>BB 위치:</b> {bb_pos:.2f} ({bb_status})\n"
-        f"🔥 <b>변동성 압축:</b> {'✅ 활성' if volatility_squeeze else '❌ 비활성'}\n\n"
+        f"🔥 <b>변동성 압축:</b> {'✅ 활성' if bb_squeeze else '❌ 비활성'}\n"
+        f"⚡ <b>브레이크아웃:</b> {'✅ 감지' if squeeze_breakout else '❌ 없음'}\n"
+        f"📊 <b>거래량:</b> {volume_ratio:.1f}x\n\n"
         f"🎯 <b>신호:</b> {signals_text}\n\n"
         f"⏰ <b>분석 시간:</b> {timestamp}\n\n"
-        f"💡 <b>전략 노트:</b>\n"
-        f"• RSI > 70 + 변동성 압축 시 매수\n"
-        f"• BB 상단 영역에서 50% 익절\n"
-        f"• BB 하단 영역에서 나머지 매도"
+        f"💡 <b>볼린저 스퀴즈 전략:</b>\n"
+        f"• 변동성 압축 → 밴드 브레이크아웃 시 매수\n"
+        f"• BB 상단(85%) 근처에서 50% 익절\n"
+        f"• BB 하단(15%) 또는 RSI<30에서 전량매도"
       )
       return message
     except Exception as e:
@@ -498,33 +503,62 @@ class UpbitRealTimeVolatilityMonitor:
       return None
 
   def check_signals(self, symbol: str) -> Dict:
-    """신호 확인"""
+    """신호 확인 (볼린저 스퀴즈 전략)"""
     try:
       data = self.get_crypto_data(symbol)
-      if data is None or len(data) < self.volatility_lookback:
-        self.logger.warning(f"Insufficient data for {symbol}")
+      if data is None or len(data) < 50:  # 충분한 데이터 필요
         return {}
-      data = self.calculate_indicators(data)
-      if data is None or data.empty:
-        self.logger.warning(f"Failed to calculate indicators for {symbol}")
-        return {}
+
+      # 볼린거 밴드 계산
+      data['SMA'] = data['close'].rolling(20).mean()
+      data['STD'] = data['close'].rolling(20).std()
+      data['Upper_Band'] = data['SMA'] + (data['STD'] * 2.0)
+      data['Lower_Band'] = data['SMA'] - (data['STD'] * 2.0)
+      data['Band_Width'] = (data['Upper_Band'] - data['Lower_Band']) / data['SMA']
+
+      # 스퀴즈 감지 (최근 20일 중 최소 밴드폭의 110% 이하)
+      data['BB_Squeeze'] = data['Band_Width'] < data['Band_Width'].rolling(20).min() * 1.1
+      data['BB_Position'] = (data['close'] - data['Lower_Band']) / (data['Upper_Band'] - data['Lower_Band'])
+
+      # RSI
+      delta = data['close'].diff()
+      gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+      loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+      rs = gain / loss
+      data['RSI'] = 100 - (100 / (1 + rs))
+
+      # 거래량 비율
+      data['Volume_MA'] = data['volume'].rolling(20).mean() if 'volume' in data.columns else 1
+      data['Volume_Ratio'] = data['volume'] / data['Volume_MA'] if 'volume' in data.columns else 1
+
       latest = data.iloc[-1]
-      if pd.isna(latest['RSI']) or pd.isna(latest['BB_Position']):
-        self.logger.warning(f"NaN values in indicators for {symbol}")
-        return {}
+      prev = data.iloc[-2] if len(data) > 1 else latest
+
+      # 스퀴즈 브레이크아웃 감지
+      squeeze_breakout = (
+          prev['BB_Squeeze'] and  # 이전에 스퀴즈 상태였고
+          (latest['close'] > latest['Upper_Band'] or  # 상단 돌파 또는
+           latest['close'] < latest['Lower_Band']) and  # 하단 이탈
+          latest['Volume_Ratio'] > 1.2  # 거래량 증가
+      )
+
       signals = {
         'symbol': symbol,
         'price': float(latest['close']),
         'rsi': float(latest['RSI']),
         'bb_position': float(latest['BB_Position']),
         'band_width': float(latest['Band_Width']),
-        'volatility_squeeze': bool(latest['Volatility_Squeeze']),
-        'buy_signal': bool(latest['Buy_Signal']),
-        'sell_50_signal': bool(latest['Sell_50_Signal']),
-        'sell_all_signal': bool(latest['Sell_All_Signal']),
+        'bb_squeeze': bool(latest['BB_Squeeze']),
+        'volume_ratio': float(latest['Volume_Ratio']),
+        'squeeze_breakout': squeeze_breakout,
+        'buy_signal': squeeze_breakout and latest['close'] > latest['Upper_Band'] and 50 < latest['RSI'] < 80,
+        'sell_50_signal': latest['BB_Position'] >= 0.85,
+        'sell_all_signal': latest['BB_Position'] <= 0.15 or latest['RSI'] < 30,
         'timestamp': latest.name
       }
+
       return signals
+
     except Exception as e:
       self.logger.error(f"Error checking signals for {symbol}: {e}")
       return {}
@@ -540,45 +574,52 @@ class UpbitRealTimeVolatilityMonitor:
     return True
 
   def format_alert_message(self, signals: Dict, signal_type: str) -> str:
-    """알림 메시지 포맷팅"""
+    """알림 메시지 포맷팅 (볼린저 스퀴즈 전략)"""
     symbol = signals['symbol']
-    korean_name = self.ticker_to_korean.get(symbol, symbol)  # Get Korean name, fallback to symbol if not found
+    korean_name = self.ticker_to_korean.get(symbol, symbol)
     price = signals['price']
     rsi = signals['rsi']
     bb_pos = signals['bb_position']
+    volume_ratio = signals.get('volume_ratio', 1.0)
     timestamp = signals['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
 
     if signal_type == 'buy':
-      message = f"""🚀 <b>매수 신호 발생!</b>
+      direction = "상승" if bb_pos > 0.5 else "하락"
+      message = f"""🚀 <b>볼린저 스퀴즈 브레이크아웃!</b>
 
 코인: <b>{korean_name}</b> ({symbol})
 현재가: <b>{price:,.0f}원</b>
+브레이크아웃 방향: <b>{direction}</b>
 RSI: <b>{rsi:.1f}</b>
 BB 위치: <b>{bb_pos:.2f}</b>
-변동성 압축: <b>활성</b>
+거래량 비율: <b>{volume_ratio:.1f}x</b>
 시간: {timestamp}
 
-⚡ 변동성 폭파 예상 구간입니다!"""
+⚡ 변동성 압축 후 폭발적 움직임 시작!"""
+
     elif signal_type == 'sell_50':
       message = f"""💡 <b>50% 익절 신호!</b>
 
 코인: <b>{korean_name}</b> ({symbol})
 현재가: <b>{price:,.0f}원</b>
-BB 위치: <b>{bb_pos:.2f}</b>
+BB 위치: <b>{bb_pos:.2f}</b> (상단 근접)
 시간: {timestamp}
 
-📈 목표 수익구간에 도달했습니다."""
-    elif signal_type == 'sell_all':
+📈 첫 번째 수익 구간 도달!"""
+
+    else:  # sell_all
+      reason = "손절" if rsi < 30 else "하단 이탈"
       message = f"""🔴 <b>전량 매도 신호!</b>
 
 코인: <b>{korean_name}</b> ({symbol})
 현재가: <b>{price:,.0f}원</b>
+신호 사유: <b>{reason}</b>
 BB 위치: <b>{bb_pos:.2f}</b>
+RSI: <b>{rsi:.1f}</b>
 시간: {timestamp}
 
-⚠️ 손절 또는 나머지 익절 시점입니다."""
-    else:
-      message = f"알 수 없는 신호 타입: {signal_type}"
+⚠️ 추세 전환 또는 리스크 관리 시점!"""
+
     return message
 
   def process_signals(self, signals: Dict) -> bool:
