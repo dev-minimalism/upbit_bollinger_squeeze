@@ -26,7 +26,8 @@ warnings.filterwarnings('ignore')
 
 
 class UpbitRealTimeVolatilityMonitor:
-  def __init__(self, telegram_bot_token: str = None, telegram_chat_id: str = None):
+  def __init__(self, telegram_bot_token: str = None,
+      telegram_chat_id: str = None):
     """
     업비트 실시간 변동성 폭파 볼린저 밴드 모니터링 시스템
 
@@ -148,10 +149,14 @@ class UpbitRealTimeVolatilityMonitor:
     self.telegram_running = False
     if self.telegram_bot_token:
       try:
-        self.telegram_app = Application.builder().token(self.telegram_bot_token).build()
-        self.telegram_app.add_handler(CommandHandler("start", self.start_command))
-        self.telegram_app.add_handler(CommandHandler("ticker", self.ticker_command))
-        self.telegram_app.add_handler(CommandHandler("status", self.status_command))
+        self.telegram_app = Application.builder().token(
+            self.telegram_bot_token).build()
+        self.telegram_app.add_handler(
+            CommandHandler("start", self.start_command))
+        self.telegram_app.add_handler(
+            CommandHandler("ticker", self.ticker_command))
+        self.telegram_app.add_handler(
+            CommandHandler("status", self.status_command))
         self.logger.info("✅ Telegram bot handlers added successfully")
       except Exception as e:
         self.logger.error(f"❌ Telegram bot initialization failed: {e}")
@@ -179,6 +184,26 @@ class UpbitRealTimeVolatilityMonitor:
     self.is_monitoring = False
     self.monitor_thread = None
     self.start_time = None
+    # 포지션 상태 관리 추가
+    self.positions = {}  # {symbol: {'status': 'none'|'holding', 'entry_price': float, 'entry_time': datetime}}
+
+  def get_position_status(self, symbol: str) -> str:
+    """포지션 상태 조회"""
+    return self.positions.get(symbol, {}).get('status', 'none')
+
+  def update_position(self, symbol: str, status: str, price: float = None):
+    """포지션 상태 업데이트"""
+    if symbol not in self.positions:
+      self.positions[symbol] = {}
+
+    self.positions[symbol]['status'] = status
+
+    if status == 'holding' and price:
+      self.positions[symbol]['entry_price'] = price
+      self.positions[symbol]['entry_time'] = datetime.now()
+    elif status == 'none':
+      self.positions[symbol].pop('entry_price', None)
+      self.positions[symbol].pop('entry_time', None)
 
   async def start_command(self, update, context):
     """Handle /start command."""
@@ -195,7 +220,8 @@ class UpbitRealTimeVolatilityMonitor:
         "💡 <b>예시:</b> /ticker BTC 또는 /ticker eth"
       )
       await update.message.reply_text(welcome_message, parse_mode='HTML')
-      self.logger.info(f"Sent welcome message to user {update.effective_user.id}")
+      self.logger.info(
+          f"Sent welcome message to user {update.effective_user.id}")
     except Exception as e:
       self.logger.error(f"Error in start_command: {e}")
       await update.message.reply_text("죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.")
@@ -203,7 +229,8 @@ class UpbitRealTimeVolatilityMonitor:
   async def ticker_command(self, update, context):
     """Handle /ticker command to analyze a specific crypto."""
     try:
-      self.logger.info(f"Received ticker command from user {update.effective_user.id}: {context.args}")
+      self.logger.info(
+          f"Received ticker command from user {update.effective_user.id}: {context.args}")
       if not context.args:
         await update.message.reply_text(
             "❌ 코인 심볼을 입력해주세요.\n\n"
@@ -257,7 +284,8 @@ class UpbitRealTimeVolatilityMonitor:
     """Handle /status command to show monitoring status."""
     try:
       current_time = datetime.now()
-      uptime = current_time - self.start_time if self.start_time else timedelta(0)
+      uptime = current_time - self.start_time if self.start_time else timedelta(
+          0)
       uptime_str = str(uptime).split('.')[0]
       last_signal_str = "없음"
       if self.last_signal_time:
@@ -297,7 +325,7 @@ class UpbitRealTimeVolatilityMonitor:
       await update.message.reply_text("❌ 상태 조회 중 오류가 발생했습니다. 다시 시도해주세요.")
 
   def format_analysis_message(self, signals: Dict) -> str:
-    """Format analysis message for Telegram command."""
+    """수정된 분석 메시지 (포지션 상태 포함)"""
     try:
       symbol = signals['symbol']
       korean_name = self.ticker_to_korean.get(symbol, symbol)
@@ -311,6 +339,7 @@ class UpbitRealTimeVolatilityMonitor:
       buy_signal = signals['buy_signal']
       sell_50_signal = signals['sell_50_signal']
       sell_all_signal = signals['sell_all_signal']
+      position_status = signals.get('position_status', 'none')
 
       if rsi >= 70:
         rsi_status = "🔥 과매수"
@@ -336,6 +365,16 @@ class UpbitRealTimeVolatilityMonitor:
 
       signals_text = " | ".join(signals_list) if signals_list else "📊 신호 없음"
 
+      # 포지션 정보 추가
+      position_info = ""
+      if position_status == 'holding' and symbol in self.positions:
+        entry_price = self.positions[symbol].get('entry_price')
+        if entry_price:
+          profit_pct = ((price - entry_price) / entry_price) * 100
+          position_info = f"\n💼 <b>보유 중:</b> 진입가 {entry_price:,.0f}원 (수익률: {profit_pct:+.1f}%)"
+      elif position_status == 'none':
+        position_info = f"\n💼 <b>포지션:</b> 없음"
+
       message = (
         f"📈 <b>분석: {korean_name}</b> ({symbol})\n\n"
         f"💰 <b>현재가:</b> {price:,.0f}원\n"
@@ -343,7 +382,7 @@ class UpbitRealTimeVolatilityMonitor:
         f"📍 <b>BB 위치:</b> {bb_pos:.2f} ({bb_status})\n"
         f"🔥 <b>변동성 압축:</b> {'✅ 활성' if bb_squeeze else '❌ 비활성'}\n"
         f"⚡ <b>브레이크아웃:</b> {'✅ 감지' if squeeze_breakout else '❌ 없음'}\n"
-        f"📊 <b>거래량:</b> {volume_ratio:.1f}x\n\n"
+        f"📊 <b>거래량:</b> {volume_ratio:.1f}x{position_info}\n\n"
         f"🎯 <b>신호:</b> {signals_text}\n\n"
         f"⏰ <b>분석 시간:</b> {timestamp}\n\n"
         f"💡 <b>볼린저 스퀴즈 전략:</b>\n"
@@ -356,10 +395,22 @@ class UpbitRealTimeVolatilityMonitor:
       self.logger.error(f"Error formatting analysis message: {e}")
       return f"❌ {signals.get('symbol', 'unknown')} 분석 메시지 생성 중 오류 발생"
 
+  def reset_all_positions(self):
+    """모든 포지션 초기화 (시스템 재시작시 사용)"""
+    self.positions = {}
+    self.logger.info("모든 포지션 상태가 초기화되었습니다.")
+
+  def get_positions_summary(self) -> str:
+    """현재 포지션 요약"""
+    holding_count = sum(
+        1 for pos in self.positions.values() if pos.get('status') == 'holding')
+    return f"현재 보유 포지션: {holding_count}개"
+
   def send_telegram_alert(self, message: str, parse_mode: str = 'HTML'):
     """텔레그램 알림 전송"""
     if not self.telegram_bot_token or not self.telegram_chat_id:
-      self.logger.info(f"Telegram Alert (not sent, no token/chat_id): {message}")
+      self.logger.info(
+          f"Telegram Alert (not sent, no token/chat_id): {message}")
       return False
 
     message = re.sub(r'<symbol>', '<b>', message, flags=re.IGNORECASE)
@@ -445,7 +496,8 @@ class UpbitRealTimeVolatilityMonitor:
     if self.heartbeat_thread and self.heartbeat_thread.is_alive():
       return
 
-    self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+    self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop,
+                                             daemon=True)
     self.heartbeat_thread.start()
     self.logger.info(f"💓 Heartbeat 스레드 시작 - {self.heartbeat_interval}초 간격")
 
@@ -462,7 +514,8 @@ class UpbitRealTimeVolatilityMonitor:
 
   def calculate_indicators(self, data: pd.DataFrame) -> pd.DataFrame:
     """기술적 지표 계산"""
-    if len(data) < max(self.bb_period, self.rsi_period, self.volatility_lookback):
+    if len(data) < max(self.bb_period, self.rsi_period,
+                       self.volatility_lookback):
       return data
 
     if 'close' not in data.columns:
@@ -473,7 +526,8 @@ class UpbitRealTimeVolatilityMonitor:
     data['Upper_Band'] = data['SMA'] + (data['STD'] * self.bb_std_multiplier)
     data['Lower_Band'] = data['SMA'] - (data['STD'] * self.bb_std_multiplier)
     data['Band_Width'] = (data['Upper_Band'] - data['Lower_Band']) / data['SMA']
-    data['Volatility_Squeeze'] = data['Band_Width'] < data['Band_Width'].rolling(
+    data['Volatility_Squeeze'] = data['Band_Width'] < data[
+      'Band_Width'].rolling(
         self.volatility_lookback).quantile(self.volatility_threshold)
     data['BB_Position'] = (data['close'] - data['Lower_Band']) / (
         data['Upper_Band'] - data['Lower_Band'])
@@ -482,12 +536,15 @@ class UpbitRealTimeVolatilityMonitor:
     loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
     rs = gain / loss
     data['RSI'] = 100 - (100 / (1 + rs))
-    data['Buy_Signal'] = (data['RSI'] > self.rsi_overbought) & (data['Volatility_Squeeze'])
-    data['Sell_50_Signal'] = (data['BB_Position'] >= 0.8) | (abs(data['BB_Position'] - 0.5) <= 0.1)
+    data['Buy_Signal'] = (data['RSI'] > self.rsi_overbought) & (
+      data['Volatility_Squeeze'])
+    data['Sell_50_Signal'] = (data['BB_Position'] >= 0.8) | (
+        abs(data['BB_Position'] - 0.5) <= 0.1)
     data['Sell_All_Signal'] = data['BB_Position'] <= 0.1
     return data
 
-  def get_crypto_data(self, symbol: str, count: int = 100) -> Optional[pd.DataFrame]:
+  def get_crypto_data(self, symbol: str, count: int = 100) -> Optional[
+    pd.DataFrame]:
     """업비트에서 코인 데이터 가져오기"""
     try:
       data = pyupbit.get_ohlcv(symbol, interval="day", count=count)
@@ -503,44 +560,67 @@ class UpbitRealTimeVolatilityMonitor:
       return None
 
   def check_signals(self, symbol: str) -> Dict:
-    """신호 확인 (볼린저 스퀴즈 전략)"""
+    """수정된 신호 확인 (포지션 상태 고려)"""
     try:
       data = self.get_crypto_data(symbol)
-      if data is None or len(data) < 50:  # 충분한 데이터 필요
+      if data is None or len(data) < 50:
         return {}
 
-      # 볼린거 밴드 계산
+      # 기존 기술적 지표 계산 (동일)
       data['SMA'] = data['close'].rolling(20).mean()
       data['STD'] = data['close'].rolling(20).std()
       data['Upper_Band'] = data['SMA'] + (data['STD'] * 2.0)
       data['Lower_Band'] = data['SMA'] - (data['STD'] * 2.0)
-      data['Band_Width'] = (data['Upper_Band'] - data['Lower_Band']) / data['SMA']
+      data['Band_Width'] = (data['Upper_Band'] - data['Lower_Band']) / data[
+        'SMA']
 
-      # 스퀴즈 감지 (최근 20일 중 최소 밴드폭의 110% 이하)
-      data['BB_Squeeze'] = data['Band_Width'] < data['Band_Width'].rolling(20).min() * 1.1
-      data['BB_Position'] = (data['close'] - data['Lower_Band']) / (data['Upper_Band'] - data['Lower_Band'])
+      data['BB_Squeeze'] = data['Band_Width'] < data['Band_Width'].rolling(
+          20).min() * 1.1
+      data['BB_Position'] = (data['close'] - data['Lower_Band']) / (
+          data['Upper_Band'] - data['Lower_Band'])
 
-      # RSI
       delta = data['close'].diff()
       gain = (delta.where(delta > 0, 0)).rolling(14).mean()
       loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
       rs = gain / loss
       data['RSI'] = 100 - (100 / (1 + rs))
 
-      # 거래량 비율
-      data['Volume_MA'] = data['volume'].rolling(20).mean() if 'volume' in data.columns else 1
-      data['Volume_Ratio'] = data['volume'] / data['Volume_MA'] if 'volume' in data.columns else 1
+      data['Volume_MA'] = data['volume'].rolling(
+          20).mean() if 'volume' in data.columns else 1
+      data['Volume_Ratio'] = data['volume'] / data[
+        'Volume_MA'] if 'volume' in data.columns else 1
 
       latest = data.iloc[-1]
       prev = data.iloc[-2] if len(data) > 1 else latest
 
       # 스퀴즈 브레이크아웃 감지
       squeeze_breakout = (
-          prev['BB_Squeeze'] and  # 이전에 스퀴즈 상태였고
-          (latest['close'] > latest['Upper_Band'] or  # 상단 돌파 또는
-           latest['close'] < latest['Lower_Band']) and  # 하단 이탈
-          latest['Volume_Ratio'] > 1.2  # 거래량 증가
+          prev['BB_Squeeze'] and
+          (latest['close'] > latest['Upper_Band'] or latest['close'] < latest[
+            'Lower_Band']) and
+          latest['Volume_Ratio'] > 1.2
       )
+
+      # 현재 포지션 상태 확인
+      current_position = self.get_position_status(symbol)
+
+      # 포지션 상태에 따른 신호 생성
+      buy_signal = False
+      sell_50_signal = False
+      sell_all_signal = False
+
+      if current_position == 'none':
+        # 포지션이 없을 때만 매수 신호 생성
+        buy_signal = (
+            squeeze_breakout and
+            latest['close'] > latest['Upper_Band'] and
+            50 < latest['RSI'] < 80
+        )
+
+      elif current_position == 'holding':
+        # 포지션이 있을 때만 매도 신호 생성
+        sell_50_signal = latest['BB_Position'] >= 0.85
+        sell_all_signal = latest['BB_Position'] <= 0.15 or latest['RSI'] < 30
 
       signals = {
         'symbol': symbol,
@@ -551,10 +631,11 @@ class UpbitRealTimeVolatilityMonitor:
         'bb_squeeze': bool(latest['BB_Squeeze']),
         'volume_ratio': float(latest['Volume_Ratio']),
         'squeeze_breakout': squeeze_breakout,
-        'buy_signal': squeeze_breakout and latest['close'] > latest['Upper_Band'] and 50 < latest['RSI'] < 80,
-        'sell_50_signal': latest['BB_Position'] >= 0.85,
-        'sell_all_signal': latest['BB_Position'] <= 0.15 or latest['RSI'] < 30,
-        'timestamp': latest.name
+        'buy_signal': buy_signal,
+        'sell_50_signal': sell_50_signal,
+        'sell_all_signal': sell_all_signal,
+        'timestamp': latest.name,
+        'position_status': current_position  # 포지션 상태 추가
       }
 
       return signals
@@ -574,7 +655,7 @@ class UpbitRealTimeVolatilityMonitor:
     return True
 
   def format_alert_message(self, signals: Dict, signal_type: str) -> str:
-    """알림 메시지 포맷팅 (볼린저 스퀴즈 전략)"""
+    """수정된 알림 메시지 (포지션 정보 포함)"""
     symbol = signals['symbol']
     korean_name = self.ticker_to_korean.get(symbol, symbol)
     price = signals['price']
@@ -582,6 +663,7 @@ class UpbitRealTimeVolatilityMonitor:
     bb_pos = signals['bb_position']
     volume_ratio = signals.get('volume_ratio', 1.0)
     timestamp = signals['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+    position_status = signals.get('position_status', 'none')
 
     if signal_type == 'buy':
       direction = "상승" if bb_pos > 0.5 else "하락"
@@ -593,62 +675,97 @@ class UpbitRealTimeVolatilityMonitor:
 RSI: <b>{rsi:.1f}</b>
 BB 위치: <b>{bb_pos:.2f}</b>
 거래량 비율: <b>{volume_ratio:.1f}x</b>
+포지션 상태: <b>신규 진입</b>
 시간: {timestamp}
 
 ⚡ 변동성 압축 후 폭발적 움직임 시작!"""
 
     elif signal_type == 'sell_50':
+      # 포지션 정보 추가
+      entry_info = ""
+      if symbol in self.positions and 'entry_price' in self.positions[symbol]:
+        entry_price = self.positions[symbol]['entry_price']
+        profit_pct = ((price - entry_price) / entry_price) * 100
+        entry_info = f"\n진입가: <b>{entry_price:,.0f}원</b>\n수익률: <b>{profit_pct:+.1f}%</b>"
+
       message = f"""💡 <b>50% 익절 신호!</b>
 
 코인: <b>{korean_name}</b> ({symbol})
-현재가: <b>{price:,.0f}원</b>
+현재가: <b>{price:,.0f}원</b>{entry_info}
 BB 위치: <b>{bb_pos:.2f}</b> (상단 근접)
+포지션 상태: <b>50% 익절 실행</b>
 시간: {timestamp}
 
 📈 첫 번째 수익 구간 도달!"""
 
     else:  # sell_all
       reason = "손절" if rsi < 30 else "하단 이탈"
+
+      # 포지션 정보 추가
+      entry_info = ""
+      if symbol in self.positions and 'entry_price' in self.positions[symbol]:
+        entry_price = self.positions[symbol]['entry_price']
+        profit_pct = ((price - entry_price) / entry_price) * 100
+        entry_info = f"\n진입가: <b>{entry_price:,.0f}원</b>\n최종 수익률: <b>{profit_pct:+.1f}%</b>"
+
       message = f"""🔴 <b>전량 매도 신호!</b>
 
 코인: <b>{korean_name}</b> ({symbol})
-현재가: <b>{price:,.0f}원</b>
+현재가: <b>{price:,.0f}원</b>{entry_info}
 신호 사유: <b>{reason}</b>
 BB 위치: <b>{bb_pos:.2f}</b>
 RSI: <b>{rsi:.1f}</b>
+포지션 상태: <b>전량 청산</b>
 시간: {timestamp}
 
-⚠️ 추세 전환 또는 리스크 관리 시점!"""
+⚠️ 포지션 완전 종료!"""
 
     return message
 
   def process_signals(self, signals: Dict) -> bool:
-    """신호 처리 및 알림"""
+    """수정된 신호 처리 (포지션 상태 업데이트 포함)"""
     if not signals:
       return False
+
     symbol = signals['symbol']
     alert_sent = False
+
+    # 매수 신호 처리
     if signals['buy_signal'] and self.should_send_alert(symbol, 'buy'):
       message = self.format_alert_message(signals, 'buy')
       if self.send_telegram_alert(message):
         self.logger.info(f"🚀 매수 신호 알림 전송: {symbol}")
         self.total_signals_sent += 1
         self.last_signal_time = datetime.now()
+
+        # 포지션 상태를 holding으로 변경
+        self.update_position(symbol, 'holding', signals['price'])
         alert_sent = True
+
+    # 50% 매도 신호 처리
     if signals['sell_50_signal'] and self.should_send_alert(symbol, 'sell_50'):
       message = self.format_alert_message(signals, 'sell_50')
       if self.send_telegram_alert(message):
         self.logger.info(f"💡 50% 매도 신호 알림 전송: {symbol}")
         self.total_signals_sent += 1
         self.last_signal_time = datetime.now()
+
+        # 포지션은 여전히 holding (50%만 매도)
         alert_sent = True
-    if signals['sell_all_signal'] and self.should_send_alert(symbol, 'sell_all'):
+
+    # 전량 매도 신호 처리
+    if signals['sell_all_signal'] and self.should_send_alert(symbol,
+                                                             'sell_all'):
       message = self.format_alert_message(signals, 'sell_all')
       if self.send_telegram_alert(message):
         self.logger.info(f"🔴 전량 매도 신호 알림 전송: {symbol}")
         self.total_signals_sent += 1
         self.last_signal_time = datetime.now()
+
+        # 포지션 상태를 none으로 변경
+        self.update_position(symbol, 'none')
         alert_sent = True
+
     return alert_sent
 
   def scan_single_crypto(self, symbol: str):
@@ -657,7 +774,8 @@ RSI: <b>{rsi:.1f}</b>
       signals = self.check_signals(symbol)
       if signals:
         self.process_signals(signals)
-        if any([signals.get('buy_signal'), signals.get('sell_50_signal'), signals.get('sell_all_signal')]):
+        if any([signals.get('buy_signal'), signals.get('sell_50_signal'),
+                signals.get('sell_all_signal')]):
           self.logger.info(
               f"{symbol}: Price={signals['price']:,.0f}원, RSI={signals['rsi']:.1f}, BB_Pos={signals['bb_position']:.2f}")
     except Exception as e:
@@ -701,7 +819,8 @@ RSI: <b>{rsi:.1f}</b>
       self.logger.error(f"❌ Telegram bot error: {e}")
       self.telegram_running = False
       if self.is_monitoring:
-        self.logger.info("🔄 Attempting to restart Telegram bot in 30 seconds...")
+        self.logger.info(
+            "🔄 Attempting to restart Telegram bot in 30 seconds...")
         time.sleep(30)
         if self.is_monitoring and not self.telegram_running:
           self.telegram_running = True
@@ -724,7 +843,8 @@ RSI: <b>{rsi:.1f}</b>
         if self.scan_count % 5 == 0:
           self._send_status_summary(self.scan_count)
         next_scan_time = (
-            current_time + timedelta(seconds=scan_interval)).strftime('%H:%M:%S')
+            current_time + timedelta(seconds=scan_interval)).strftime(
+            '%H:%M:%S')
         self.logger.info(f"   ⏰ 다음 스캔: {next_scan_time}")
         time.sleep(scan_interval)
       except Exception as e:
@@ -750,10 +870,13 @@ RSI: <b>{rsi:.1f}</b>
     self.send_telegram_alert(summary_message)
 
   def start_monitoring(self, scan_interval: int = 300):
-    """자동 모니터링 시작"""
+    """자동 모니터링 시작 (포지션 초기화 추가)"""
     if self.is_monitoring:
       self.logger.warning("모니터링이 이미 실행 중입니다.")
       return
+
+    # 모니터링 시작시 포지션 초기화
+    self.reset_all_positions()
     self.is_monitoring = True
     self.start_time = datetime.now()
     self.scan_count = 0
@@ -762,7 +885,8 @@ RSI: <b>{rsi:.1f}</b>
     self.logger.info(f"🚀 자동 모니터링 시작 (스캔 간격: {scan_interval}초)")
     if self.telegram_app and not self.telegram_running:
       self.telegram_running = True
-      self.telegram_thread = threading.Thread(target=self._run_telegram_bot, daemon=True)
+      self.telegram_thread = threading.Thread(target=self._run_telegram_bot,
+                                              daemon=True)
       self.telegram_thread.start()
       self.logger.info("✅ Telegram bot thread started")
     self.start_heartbeat()
@@ -785,7 +909,9 @@ RSI: <b>{rsi:.1f}</b>
 
 💡 <b>예시:</b> /ticker BTC"""
       self.send_telegram_alert(start_message)
-    self.monitor_thread = threading.Thread(target=self._auto_monitoring_loop, args=(scan_interval,), daemon=False)  # Changed daemon to False
+    self.monitor_thread = threading.Thread(target=self._auto_monitoring_loop,
+                                           args=(scan_interval,),
+                                           daemon=False)  # Changed daemon to False
     self.monitor_thread.start()
     self.logger.info("✅ 자동 모니터링 스레드가 시작되었습니다.")
     # Keep main thread alive by joining the monitoring thread
@@ -825,7 +951,8 @@ RSI: <b>{rsi:.1f}</b>
 
   def get_monitoring_statistics(self) -> Dict:
     """모니터링 통계 조회"""
-    uptime = datetime.now() - self.start_time if self.start_time else timedelta(0)
+    uptime = datetime.now() - self.start_time if self.start_time else timedelta(
+        0)
     return {
       'is_running': self.is_monitoring,
       'watchlist_count': len(self.watchlist),
@@ -833,9 +960,12 @@ RSI: <b>{rsi:.1f}</b>
       'uptime_formatted': str(uptime).split('.')[0],
       'total_alerts': self.total_signals_sent,
       'scan_count': self.scan_count,
-      'telegram_configured': bool(self.telegram_bot_token and self.telegram_chat_id),
-      'last_heartbeat': self.last_heartbeat.strftime('%Y-%m-%d %H:%M:%S') if self.last_heartbeat else None,
-      'last_signal_time': self.last_signal_time.strftime('%Y-%m-%d %H:%M:%S') if self.last_signal_time else None
+      'telegram_configured': bool(
+          self.telegram_bot_token and self.telegram_chat_id),
+      'last_heartbeat': self.last_heartbeat.strftime(
+          '%Y-%m-%d %H:%M:%S') if self.last_heartbeat else None,
+      'last_signal_time': self.last_signal_time.strftime(
+          '%Y-%m-%d %H:%M:%S') if self.last_signal_time else None
     }
 
   def get_current_status(self) -> Dict:
@@ -844,7 +974,8 @@ RSI: <b>{rsi:.1f}</b>
       'is_monitoring': self.is_monitoring,
       'watchlist_count': len(self.watchlist),
       'last_alerts_count': len(self.last_alerts),
-      'telegram_configured': bool(self.telegram_bot_token and self.telegram_chat_id),
+      'telegram_configured': bool(
+          self.telegram_bot_token and self.telegram_chat_id),
       'scan_count': self.scan_count,
       'total_signals_sent': self.total_signals_sent
     }
@@ -918,6 +1049,7 @@ RSI: <b>{rsi:.1f}</b>
       self.logger.error("Telegram connection test failed")
     return success
 
+
 def main():
   """메인 실행 함수"""
   TELEGRAM_BOT_TOKEN = os.getenv('UPBIT_BOLLINGER_TELEGRAM_BOT_TOKEN')
@@ -929,7 +1061,8 @@ def main():
   print("=== 업비트 실시간 변동성 폭파 모니터링 시스템 ===")
   print("💓 Heartbeat 기능: 1시간마다 상태 알림")
   print("🟢 24시간 거래 (코인 마켓)")
-  print("📬 Use /ticker <symbol> to analyze a crypto (e.g., /ticker BTC or /ticker eth)")
+  print(
+      "📬 Use /ticker <symbol> to analyze a crypto (e.g., /ticker BTC or /ticker eth)")
   if monitor.telegram_bot_token:
     monitor.test_telegram_connection()
   try:
@@ -942,7 +1075,8 @@ def main():
     print(f"🇰🇷 한국 시간: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"📊 거래 상태: 🟢 24시간 거래 중")
     print("\n실시간 모니터링 시작...")
-    monitor.start_monitoring(scan_interval=300)  # Changed from run_continuous_monitoring to start_monitoring
+    monitor.start_monitoring(
+        scan_interval=300)  # Changed from run_continuous_monitoring to start_monitoring
   except KeyboardInterrupt:
     print("\n모니터링 종료 중...")
     monitor.stop_monitoring()
@@ -950,6 +1084,7 @@ def main():
   except Exception as e:
     print(f"오류 발생: {e}")
     monitor.stop_monitoring()
+
 
 if __name__ == "__main__":
   main()
